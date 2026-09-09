@@ -68,6 +68,8 @@ void PrintUsage()
            "  proto [--alpha <0-255>] [--duration <ms>]   run (point-and-play):\n"
            "        press Enter in HELLDIVERS to instantly start typing Chinese;\n"
            "        Enter send / Esc cancel / F8 manual toggle; Alt-Tab auto quits\n"
+           "  proto --spawn %%command%%                  (Steam launch option: start this tool,\n"
+           "        then launch the game itself; exits 5s after game closes)\n"
            "  proto fg                                     print foreground diagnostics\n"
            "  proto inject <text...> [--enter] [--delay <ms>]   SendInput unicode inject\n"
            "  proto inject --file <utf8-path> [--enter] [--delay <ms>]\n"
@@ -353,6 +355,76 @@ done:
     return 0;
 }
 
+// --spawn 模式：Steam 高级启动选项用。
+//   启动选项写法： "…\proto.exe" --spawn %command%
+//   Steam 先拉起 proto，本函数从原始命令行剥出 %command% 展开的游戏启动串，
+//   CreateProcess 拉起 HD2，然后进入守护（游戏在跑→常驻；游戏退出→5s 自退）。
+int RunSpawnDaemon()
+{
+    const wchar_t *cmdline = GetCommandLineW();
+    // 跳过 argv[0]（程序路径，可能带引号）。
+    const wchar_t *p = cmdline;
+    if (*p == L'"')
+    {
+        ++p;
+        while (*p != L'\0' && *p != L'"')
+        {
+            ++p;
+        }
+        if (*p == L'"')
+        {
+            ++p;
+        }
+    }
+    else
+    {
+        while (*p != L'\0' && *p != L' ' && *p != L'\t')
+        {
+            ++p;
+        }
+    }
+    while (*p == L' ' || *p == L'\t')
+    {
+        ++p;
+    }
+    // 跳过 "--spawn" token。
+    while (*p != L'\0' && *p != L' ' && *p != L'\t')
+    {
+        ++p;
+    }
+    while (*p == L' ' || *p == L'\t')
+    {
+        ++p;
+    }
+    std::wstring gameCmd = p; // 剩余即 %command% 展开的游戏启动串（保留引号/参数）
+    // 去除尾部空白。
+    while (!gameCmd.empty() &&
+           (gameCmd.back() == L' ' || gameCmd.back() == L'\t' || gameCmd.back() == L'\r'))
+    {
+        gameCmd.pop_back();
+    }
+    if (gameCmd.empty())
+    {
+        printf("[spawn] no game command found (usage: proto --spawn %%command%%)\n");
+        return 1;
+    }
+    printf("[spawn] launching game: %ls\n", gameCmd.c_str());
+    fflush(stdout);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(nullptr, gameCmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                        &startup, &process))
+    {
+        printf("[spawn] CreateProcess failed lastError=%lu\n", GetLastError());
+        return 1;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    printf("[spawn] game started — entering input daemon\n");
+    return RunDaemon(0, 0); // 复用守护（自退逻辑：HD 在则常驻、退出则 5s 自退）
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t **argv)
@@ -378,6 +450,10 @@ int wmain(int argc, wchar_t **argv)
     if (argc >= 2)
     {
         const std::wstring command = argv[1];
+        if (command == L"--spawn")
+        {
+            return RunSpawnDaemon(); // Steam 启动选项：proto --spawn %command%
+        }
         if (command == L"help" || command == L"--help")
         {
             PrintUsage();
