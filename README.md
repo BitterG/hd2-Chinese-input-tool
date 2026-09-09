@@ -19,14 +19,14 @@
 ### 2）Steam 启动选项随游戏自动启动（推荐）
 库 → HELLDIVERS 2 → 属性 → 通用 → **启动选项**：
 ```
-"C:\Users\kugua\Desktop\hd2-Chinese-input-tool\hd2-ocr-input\prototype\hd2-chinese-input.exe" --spawn %command%
+"存放路径\hd2-chinese-input.exe" --spawn %command%
 ```
 点"开始游戏"：工具自动启动并拉起游戏；游戏退出后工具自动结束。**单独关闭工具不影响游戏**。
 
 ### 3）任务计划自动拉起（可选，不改 Steam）
 `launcher.bat` 由任务计划每分钟检查一次：游戏在跑且工具没在跑 → 拉起工具。注册：
 ```
-schtasks /Create /F /TN "HD2-CN-Input-Launcher" /TR "\"C:\Users\kugua\Desktop\hd2-Chinese-input-tool\hd2-ocr-input\prototype\launcher.bat\"" /SC MINUTE /MO 1
+schtasks /Create /F /TN "HD2-CN-Input-Launcher" /TR "\"存放路径\launcher.bat\"" /SC MINUTE /MO 1
 ```
 取消：`schtasks /Delete /TN "HD2-CN-Input-Launcher" /F`
 
