@@ -1,5 +1,5 @@
 @echo off
-rem Build hd2-ocr-input prototype (point-and-play Enter-instant-open tool).
+rem Build hd2-chinese-input tool (point-and-play Enter-instant-open Chinese IME for HELLDIVERS 2).
 rem Usage (cmd):      build.cmd
 rem Usage (git bash): cmd //c build.cmd
 setlocal
@@ -11,9 +11,9 @@ if not defined VSINSTALL (
 )
 
 call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" >nul
-cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DUNICODE /D_UNICODE /O2 src\proto.cpp src\fgutil.cpp src\inject.cpp src\carrier.cpp src\floattext.cpp /link user32.lib gdi32.lib dwmapi.lib imm32.lib shell32.lib /out:proto.exe
+cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DUNICODE /D_UNICODE /O2 src\proto.cpp src\fgutil.cpp src\inject.cpp src\carrier.cpp src\floattext.cpp /link user32.lib gdi32.lib dwmapi.lib imm32.lib shell32.lib /out:hd2-chinese-input.exe
 if errorlevel 1 (
     echo [build] cl failed
     exit /b 2
 )
-echo [build] ok: proto.exe
+echo [build] ok: hd2-chinese-input.exe
