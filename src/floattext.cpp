@@ -10,7 +10,8 @@ const wchar_t *kClassName = L"Hd2OcrTextOverlayWnd";
 constexpr int kWidth = 1000;
 constexpr int kHeight = 78;
 constexpr int kBottomMargin = 150;
-constexpr BYTE kAlpha = 235;
+// 浮层整体透明度（LWA_ALPHA）：降低遮挡感，255=不透明。当前 170（半透仍清晰可读）。
+constexpr BYTE kAlpha = 170;
 
 } // namespace
 
