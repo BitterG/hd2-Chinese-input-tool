@@ -9,11 +9,17 @@ struct ISensingSource
 {
     virtual void Start(std::function<void(bool chatOpen)> onEvent) = 0;
     virtual void Stop() = 0;
+
+    // 应用内自主退出（发送/Esc）后同步内部状态（默认空实现）。
+    // 热键源：复位 toggle 状态，防下一次 F8 需按两次；
+    // 像素源：施加抑制期，防残留聊天框特征立即回环重进。
+    virtual void ResetToClosed() {}
+
     virtual ~ISensingSource() = default;
 };
 
 // 骨架占位实现（P0）：RegisterHotKey(F8) 手动模拟"聊天框开/关"事件。
-// 感知阶段由 PixelOcrSensingSource 替换，主控不感知差异。
+// 感知阶段由 PixelSensingSource 等替换，主控不感知差异。
 class HotkeySensingSource final : public ISensingSource
 {
 public:
@@ -23,9 +29,7 @@ public:
     // 消息循环收到 WM_HOTKEY 时调用；返回是否被本源消费。
     bool HandleHotkey(WPARAM hotkeyId);
 
-    // 应用内自主退出（发送/Esc）后同步：把 toggle 内部状态复位为 closed，
-    // 避免下一次 F8 因状态残留需按两次才能进入。幂等。
-    void ResetToClosed();
+    void ResetToClosed() override;
 
     bool running() const { return running_; }
 
