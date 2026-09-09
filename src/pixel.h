@@ -32,7 +32,7 @@ public:
 
     // 判别子段占面板宽的比例（左侧图标+文字区）。
     static constexpr double kDetectWidthRatio = 0.62;
-    // ResetToClosed 后的抑制时长（避免发送/Esc 后残留画面立刻重进）。
+    // ResetToClosed 的默认抑制时长（参数 0 时使用；Esc/手动退出防自动重进）。
     static constexpr unsigned long long kSuppressOpenMs = 1500;
 
     explicit PixelSensingSource(RoiSpec roi = RoiSpec{}, int intervalMs = 250,
@@ -40,7 +40,8 @@ public:
 
     void Start(std::function<void(bool chatOpen)> onEvent) override;
     void Stop() override;
-    void ResetToClosed() override;
+    // suppressMs=0 用默认 kSuppressOpenMs；否则用给定时长（发送成功场景传短值以便连发）。
+    void ResetToClosed(unsigned long long suppressMs = 0) override;
 
     bool running() const { return running_.load(); }
 

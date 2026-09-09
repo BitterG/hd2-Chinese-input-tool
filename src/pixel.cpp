@@ -46,9 +46,13 @@ void PixelSensingSource::Stop()
     fflush(stdout);
 }
 
-void PixelSensingSource::ResetToClosed()
+void PixelSensingSource::ResetToClosed(unsigned long long suppressMs)
 {
-    suppressOpenUntilMs_.store(GetTickCount64() + kSuppressOpenMs);
+    if (suppressMs == 0)
+    {
+        suppressMs = kSuppressOpenMs;
+    }
+    suppressOpenUntilMs_.store(GetTickCount64() + suppressMs);
 }
 
 void PixelSensingSource::Loop()
@@ -95,16 +99,20 @@ void PixelSensingSource::Loop()
                                 {
                                     if (suppressOpenUntilMs_.load() <= now)
                                     {
-                                        if (!sentOpen && onEvent_)
+                                        const bool firstOpen = !sentOpen;
+                                        if (firstOpen && onEvent_)
                                         {
                                             onEvent_(true);
                                         }
                                         sentOpen = true;
-                                        printf("[pixel] chat-open (runMed=%.2f M150=%.1f%% "
-                                               "iconW240=%.2f%%)\n",
-                                               features.runMedRatio, features.pctM150,
-                                               features.pctIconW240);
-                                        fflush(stdout);
+                                        if (firstOpen)
+                                        {
+                                            printf("[pixel] chat-open (runMed=%.2f M150=%.1f%% "
+                                                   "iconW240=%.2f%%)\n",
+                                                   features.runMedRatio, features.pctM150,
+                                                   features.pctIconW240);
+                                            fflush(stdout);
+                                        }
                                     }
                                     else
                                     {

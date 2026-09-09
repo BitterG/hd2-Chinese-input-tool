@@ -36,7 +36,7 @@ bool HotkeySensingSource::HandleHotkey(WPARAM hotkeyId)
     return true;
 }
 
-void HotkeySensingSource::ResetToClosed()
+void HotkeySensingSource::ResetToClosed(unsigned long long /*suppressMs*/)
 {
     chatOpen_ = false;
 }

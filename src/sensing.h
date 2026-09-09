@@ -10,10 +10,12 @@ struct ISensingSource
     virtual void Start(std::function<void(bool chatOpen)> onEvent) = 0;
     virtual void Stop() = 0;
 
-    // 应用内自主退出（发送/Esc）后同步内部状态（默认空实现）。
-    // 热键源：复位 toggle 状态，防下一次 F8 需按两次；
-    // 像素源：施加抑制期，防残留聊天框特征立即回环重进。
-    virtual void ResetToClosed() {}
+    // 应用内自主退出后同步内部状态。suppressMs：抑制时长提示（源可忽略；
+    // 热键源复位 toggle 防按两次；像素源按此施加抑制期防残留回环）。
+    virtual void ResetToClosed(unsigned long long suppressMs)
+    {
+        (void)suppressMs; // 默认实现忽略时长
+    }
 
     virtual ~ISensingSource() = default;
 };
@@ -29,7 +31,7 @@ public:
     // 消息循环收到 WM_HOTKEY 时调用；返回是否被本源消费。
     bool HandleHotkey(WPARAM hotkeyId);
 
-    void ResetToClosed() override;
+    void ResetToClosed(unsigned long long suppressMs) override;
 
     bool running() const { return running_; }
 

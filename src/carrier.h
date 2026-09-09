@@ -14,9 +14,12 @@
 // P2：Edit 文本变化（EN_CHANGE）经 onTextChanged 回调通知主控刷新"已上屏文本"浮层。
 // P3：子类化 Edit 拦截 Enter/Esc 两段式语义——IME 组字中 Enter/Esc 放行给 IME
 // （确认候选/取消组合）；非组字态 Enter = 发送请求（带已上屏文本）、Esc = 取消请求。
+// P4：失焦自退——WM_ACTIVATE WA_INACTIVE（玩家 Alt-Tab/切走）→ onInactive 回调，
+// 主控静默退出打字态（HideQuiet：隐藏但不抢回前台）。
 //
 // 生命周期：Create 创建并保持隐藏；ShowAndFocus = 进入打字态（清空文本 + 显示 + 抢前台 +
-// SetFocus(edit)）；HideAndRestoreFocus = 退出打字态（隐藏 + 前台还给记录的游戏窗口）。
+// SetFocus(edit)）；HideAndRestoreFocus = 退出打字态（隐藏 + 前台还给游戏窗口）；
+// HideQuiet = 静默退出（仅隐藏，不抢前台）。
 class CarrierWindow
 {
 public:
@@ -34,6 +37,9 @@ public:
     // chat-close：隐藏承载窗，把前台还给 gameHwnd。
     void HideAndRestoreFocus();
 
+    // 静默隐藏（不抢回前台）——用于失焦自退：玩家切走后安静让路。
+    void HideQuiet();
+
     // 绑定"Edit 已上屏文本变化"回调（主控用它刷新迷你浮层；空串=已清空）。
     void SetOnTextChanged(std::function<void(std::wstring)> callback);
 
@@ -42,6 +48,9 @@ public:
 
     // P3：绑定取消请求（非组字态 Esc）。
     void SetOnCancelRequested(std::function<void()> callback);
+
+    // P4：绑定"承载窗失去激活"回调（玩家切走/Alt-Tab 时触发，主控据此静默退出打字态）。
+    void SetOnInactive(std::function<void()> callback);
 
     bool visible() const { return visible_; }
     HWND hwnd() const { return hwnd_; }
@@ -60,5 +69,6 @@ private:
     std::function<void(std::wstring)> onTextChanged_;
     std::function<void(std::wstring)> onSendRequested_;
     std::function<void()> onCancelRequested_;
+    std::function<void()> onInactive_;
     bool visible_ = false;
 };

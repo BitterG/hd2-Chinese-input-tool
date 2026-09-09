@@ -79,6 +79,11 @@ void CarrierWindow::SetOnCancelRequested(std::function<void()> callback)
     onCancelRequested_ = std::move(callback);
 }
 
+void CarrierWindow::SetOnInactive(std::function<void()> callback)
+{
+    onInactive_ = std::move(callback);
+}
+
 bool CarrierWindow::Create(HINSTANCE hInstance, BYTE windowAlpha)
 {
     WNDCLASSW wc{};
@@ -163,6 +168,17 @@ void CarrierWindow::HideAndRestoreFocus()
     }
 }
 
+void CarrierWindow::HideQuiet()
+{
+    if (hwnd_ != nullptr && visible_)
+    {
+        ShowWindow(hwnd_, SW_HIDE);
+        visible_ = false;
+        printf("[carrier] hidden quietly (inactive, no foreground steal)\n");
+        fflush(stdout);
+    }
+}
+
 LRESULT CALLBACK CarrierWindow::EditSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
                                                  LPARAM lParam)
 {
@@ -230,6 +246,13 @@ LRESULT CALLBACK CarrierWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
         return 0;
     }
+    case WM_ACTIVATE:
+        // 玩家切走（Alt-Tab/点击其它窗口）→ 承载窗失去激活 → 通知主控静默退出打字态。
+        if (self != nullptr && LOWORD(wParam) == WA_INACTIVE && self->onInactive_)
+        {
+            self->onInactive_();
+        }
+        break;
     case WM_SIZE:
         if (self != nullptr && self->edit_ != nullptr)
         {
