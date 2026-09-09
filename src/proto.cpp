@@ -421,8 +421,41 @@ int RunSpawnDaemon()
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
-    printf("[spawn] game started — entering input daemon\n");
-    return RunDaemon(0, 0); // 复用守护（自退逻辑：HD 在则常驻、退出则 5s 自退）
+
+    // 双进程设计：另起"独立服务子进程"（自身 exe、无参、新控制台）承载输入守护。
+    // 游戏是壳的子进程，壳存活则 Steam 不杀游戏；用户可单独关服务窗口而不影响游戏。
+    wchar_t selfPath[MAX_PATH] = L"";
+    GetModuleFileNameW(nullptr, selfPath, MAX_PATH);
+    if (selfPath[0] == L'\0')
+    {
+        printf("[spawn] GetModuleFileName failed\n");
+        return 1;
+    }
+    std::wstring selfCmd = L"\"" + std::wstring(selfPath) + L"\"";
+    PROCESS_INFORMATION service{};
+    STARTUPINFOW serviceStartup{};
+    serviceStartup.cb = sizeof(serviceStartup);
+    const BOOL serviceOk =
+        CreateProcessW(selfPath, selfCmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE,
+                       nullptr, nullptr, &serviceStartup, &service);
+    if (!serviceOk)
+    {
+        printf("[spawn] tool service start failed lastError=%lu\n", GetLastError());
+        return 1;
+    }
+    CloseHandle(service.hThread);
+    CloseHandle(service.hProcess);
+    printf("[spawn] tool service started in its own window — closing that service window "
+           "leaves the game running\n");
+    fflush(stdout);
+
+    // 壳（被 Steam 视为"游戏进程"）去控制台并驻留，直到游戏退出后自行结束。
+    FreeConsole();
+    while (IsProcessRunning(L"helldivers2.exe"))
+    {
+        Sleep(500);
+    }
+    return 0; // 游戏已退出 → 壳退出 → Steam 正常结束
 }
 
 } // namespace
