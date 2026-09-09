@@ -46,6 +46,10 @@ constexpr unsigned long long kProcessCheckIntervalMs = 500;
 // Enter 直呼出钩子状态（主线程安装/清理；回调投递主线程消息）。
 DWORD g_hookMainThreadId = 0;
 
+// 托盘 helpers 前置声明（实现见本 namespace 尾部）。
+HWND CreateTrayIcon(HINSTANCE instance);
+void RemoveTrayIcon(HWND hwnd);
+
 // WH_KEYBOARD_LL：前台为 HD2 且按 Enter → 通知主线程进入打字态（不吞键，放行给游戏）。
 LRESULT CALLBACK EnterOpenHookProc(int code, WPARAM wParam, LPARAM lParam)
 {
@@ -260,6 +264,14 @@ int RunDaemon(BYTE windowAlpha, DWORD maxDurationMs)
     controller.carrier.SetOnCancelRequested([&controller]() { controller.OnCancelRequested(); });
     controller.carrier.SetOnInactive([&controller]() { controller.OnCarrierInactive(); });
 
+    // 托盘图标（隐藏消息窗 + 右键退出；无控制台黑窗时的手动退出入口）。
+    HWND trayHwnd = CreateTrayIcon(instance);
+    if (trayHwnd == nullptr)
+    {
+        printf("[daemon] tray icon unavailable (quit via task manager or closing the game)\n");
+        fflush(stdout);
+    }
+
     const DWORD mainThreadId = GetCurrentThreadId();
     g_hookMainThreadId = mainThreadId;
     // Enter 直呼出：只监听不吞键，游戏正常收到 Enter 打开聊天框。
@@ -350,6 +362,7 @@ done:
         UnregisterHotKey(nullptr, kF8HotkeyId);
     }
     g_hookMainThreadId = 0;
+    RemoveTrayIcon(trayHwnd);
     controller.overlay.Hide();
     controller.carrier.HideAndRestoreFocus();
     return 0;
@@ -458,17 +471,100 @@ int RunSpawnDaemon()
     return 0; // 游戏已退出 → 壳退出 → Steam 正常结束
 }
 
+// ---- 托盘图标（无控制台黑窗后，手动退出工具的唯一入口）----
+constexpr UINT kMsgTray = WM_APP + 0x40;
+constexpr UINT kCmdTrayExit = 1;
+const wchar_t *kTrayWndClass = L"Hd2ToolTrayWnd";
+
+LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == kMsgTray && LOWORD(lParam) == WM_RBUTTONUP)
+    {
+        POINT pt{};
+        GetCursorPos(&pt);
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, kCmdTrayExit, L"退出 HD2 中文输入");
+        SetForegroundWindow(hwnd);
+        const UINT chosen = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0,
+                                           hwnd, nullptr);
+        DestroyMenu(menu);
+        if (chosen == kCmdTrayExit)
+        {
+            PostQuitMessage(0);
+        }
+        return 0;
+    }
+    if (message == WM_COMMAND && LOWORD(wParam) == kCmdTrayExit)
+    {
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+// 注册隐藏消息窗并添加托盘图标；成功返回窗口句柄（0=失败）。
+HWND CreateTrayIcon(HINSTANCE instance)
+{
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = TrayWndProc;
+    wc.hInstance = instance;
+    wc.lpszClassName = kTrayWndClass;
+    if (RegisterClassW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+    {
+        return nullptr;
+    }
+    HWND hwnd = CreateWindowExW(0, kTrayWndClass, L"", 0, 0, 0, 0, 0, nullptr, nullptr, instance,
+                                nullptr);
+    if (hwnd == nullptr)
+    {
+        return nullptr;
+    }
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = kMsgTray;
+    nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wcscpy_s(nid.szTip, L"HD2 中文输入");
+    if (!Shell_NotifyIconW(NIM_ADD, &nid))
+    {
+        DestroyWindow(hwnd);
+        return nullptr;
+    }
+    return hwnd;
+}
+
+void RemoveTrayIcon(HWND hwnd)
+{
+    if (hwnd == nullptr)
+    {
+        return;
+    }
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+    DestroyWindow(hwnd);
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t **argv)
 {
-    // 可选参数：--alpha / --duration（位置任意）。
+    // 可选参数：--alpha / --duration / --console（位置任意）。
     BYTE windowAlpha = 0;
     DWORD maxDurationMs = 0;
+    bool keepConsole = false; // --console：保留控制台窗口便于调试查看日志
     for (int i = 1; i < argc; ++i)
     {
         const std::wstring arg = argv[i];
-        if (arg == L"--alpha" && i + 1 < argc)
+        if (arg == L"--console")
+        {
+            keepConsole = true;
+        }
+        else if (arg == L"--alpha" && i + 1 < argc)
         {
             ++i;
             const int value = _wtoi(argv[i]);
@@ -479,6 +575,11 @@ int wmain(int argc, wchar_t **argv)
             ++i;
             maxDurationMs = static_cast<DWORD>(_wtoi(argv[i]));
         }
+    }
+    // 默认不显示控制台黑窗（双击/服务均无窗口）。--console 保留窗口做调试。
+    if (!keepConsole && GetConsoleWindow() != nullptr)
+    {
+        FreeConsole();
     }
     if (argc >= 2)
     {
@@ -500,7 +601,7 @@ int wmain(int argc, wchar_t **argv)
         {
             return RunInject(argc, argv, 2);
         }
-        if (command == L"--alpha" || command == L"--duration")
+        if (command == L"--alpha" || command == L"--duration" || command == L"--console")
         {
             return RunDaemon(windowAlpha, maxDurationMs);
         }
