@@ -1,28 +1,24 @@
-// hd2-ocr-input prototype — P4-3：守护 --auto（Enter 直呼出 + 像素冗余）。
+// hd2-ocr-input prototype — HD2 中文输入工具原型（最终形态）。
 //
-//   proto --auto [--duration <ms>] [--alpha <0-255>]
-//     --auto 交互（进入零延迟、跟手）：
-//       WH_KEYBOARD_LL 监听 Enter（只监听不吞键）：前台=HD2 且非打字态按下 Enter
-//       → 主线程延迟 ~40ms（让游戏先打开聊天框，避免抢焦竞态）→ 进入打字态。
-//       发送补发的 Enter（SendInput）也会被钩子捕获 → 发送后冷却窗（400ms）内忽略，
-//       避免"发送成功后又自动呼出"。
-//       Enter/Esc/发送等闭环逻辑同 F8 模式；F8 = 手动兜底切换。
-//       像素源保留为冗余触发（主控 guard 去重；覆盖聊天键改绑等情况）。
-//   非 --auto 保持原 F8 toggle 占位模式。
+//   proto [--auto] [--duration <ms>] [--alpha <0-255>]
+//     --auto（推荐）：Enter 直呼出——WH_KEYBOARD_LL 监听游戏内 Enter（不吞键），
+//       前台=HD2 且非打字态按下 Enter → 延迟 ~40ms（让游戏先打开聊天框，防抢焦竞态）
+//       → 显示透明承载窗进入打字态（系统 IME 组字 + 迷你浮层看已上屏文本）。
+//       发送补发的 Enter 也会被钩子捕获 → 发送后 400ms 冷却忽略，避免发送完又自动呼出。
+//       玩家切走（Alt-Tab）→ 失焦自退，静默隐藏不抢前台。
+//       F8 = 手动切换兜底；Enter 发送 / Esc 取消。
+//     (不带 --auto)：F8 toggle 占位模式（hotkey 事件源驱动同一主控）。
 //
-// 抑制时长参数化（支持连发）：发送成功 → 短抑制（300ms）；Esc/F8 → 长抑制（1200ms）。
-//
-//   proto classify <roi.bin> / pixeldemo / sniff / fg / inject  见各函数注释
+//   历史说明：早期验证过"像素特征 + OCR 感知聊天框开/关"（capture/feature/pixel 模块与
+//   sniff/classify/pixeldemo 工具），实测延迟不跟手，已由 Enter 直呼出替代并整体移除；
+//   判别经验保留于 git 历史与 SENSING.md（已标注废弃）。
 //
 // 编译：build.cmd（vswhere + cl，零第三方依赖）。产物 proto.exe。
 
-#include "capture.h"
 #include "carrier.h"
-#include "feature.h"
 #include "fgutil.h"
 #include "floattext.h"
 #include "inject.h"
-#include "pixel.h"
 #include "sensing.h"
 
 #include <windows.h>
@@ -35,9 +31,7 @@
 
 namespace {
 
-// 像素源事件 / Enter 直呼出 → 主线程投递消息（跨线程安全地驱动 UI/承载窗）。
-constexpr UINT kMsgPixelOpen = WM_APP + 0x10;
-constexpr UINT kMsgPixelClose = WM_APP + 0x11;
+// Enter 直呼出 → 主线程投递消息（跨线程安全地驱动 UI/承载窗）。
 constexpr UINT kMsgEnterOpen = WM_APP + 0x12;
 constexpr int kAutoF8Id = 1;
 // Enter 直呼出的抢焦竞态窗口：让游戏先处理 Enter 打开聊天框，再进入打字态。
@@ -70,32 +64,27 @@ void PrintUsage()
     printf("usage:\n"
            "  proto [--auto] [--duration <ms>] [--alpha <0-255>]   daemon.\n"
            "       --auto: press Enter (in-game chat key) to instantly open typing UI;\n"
-           "               F8 = manual toggle fallback; pixel sensing kept as redundancy\n"
+           "               F8 = manual toggle fallback\n"
            "       (default: F8 toggle placeholder sensing)\n"
            "       alpha 0=full transparent (default); raise (e.g. 220) to see carrier/IME\n"
-           "  proto pixeldemo [--duration <ms>]           run pixel sensing, print open/close events\n"
-           "  proto classify <roi.bin>                    classify a dumped ROI frame (4-state)\n"
-           "  proto sniff [--x <px>] [--y <px>] [--w <px>] [--h <px>]\n"
-           "             [--interval <ms>] [--count <n>]  observe ROI pixel features (calibration)\n"
            "  proto fg                                     print foreground diagnostics\n"
            "  proto inject <text...> [--enter] [--delay <ms>]   SendInput unicode inject\n"
            "  proto inject --file <utf8-path> [--enter] [--delay <ms>]\n"
            "  proto help\n");
 }
 
-// 主控：接收感知/承载窗事件，驱动浮层与发送闭环（必须在主线程调用——UI 操作）。
+// 主控：接收事件（Enter 直呼出/热键/承载窗），驱动浮层与发送闭环（主线程调用——UI 操作）。
 struct AppController
 {
-    // 应用内退出后的感知抑制时长：
-    //   Esc/F8 手动退出：聊天框可能仍开，需较长抑制防"取消后立即自动重进"循环；
-    //   发送成功：聊天框已关，只需短抑制防帧残留，允许快速连发再入。
+    // 应用内退出后同步感知源状态的抑制时长（保留自像素感知时期；热键源忽略参数，
+    // 仅复位其内部 toggle 状态。若未来重新引入像素/OCR 感知可复用此参数化语义）。
     static constexpr unsigned long long kExitSuppressMs = 1200;
     static constexpr unsigned long long kSendSuppressMs = 300;
 
     CarrierWindow carrier;
     TextOverlay overlay;
     HWND gameHwnd = nullptr;
-    ISensingSource *sensingSource = nullptr; // 当前感知源（热键占位 或 像素源）
+    ISensingSource *sensingSource = nullptr; // 非 --auto 的 F8 占位源（--auto 下为 null）
     bool inChat = false;
     ULONGLONG lastSendMs = 0; // 最近发送完成时刻（GetTickCount64），供 Enter 呼出冷却
 
@@ -128,7 +117,7 @@ struct AppController
         SyncSensingClosed(kExitSuppressMs); // 手动/取消类退出：长抑制防自动重进
     }
 
-    // 应用内退出后同步感知源状态（热键源复位 toggle；像素源按 suppressMs 施加抑制期）。
+    // 应用内退出后同步热键占位源（复位 toggle，防下一次 F8 需按两次）。
     void SyncSensingClosed(unsigned long long suppressMs)
     {
         if (sensingSource != nullptr)
@@ -139,10 +128,10 @@ struct AppController
 
     void OnChatClose()
     {
-        DoExitChat(); // 感知/热键触发关闭
+        DoExitChat(); // 热键触发关闭
     }
 
-    // F8 手动兜底切换：基于实际状态（规避热键内部 toggle 与主控状态脱节）。
+    // F8 手动切换：基于实际状态（规避热键内部 toggle 与主控状态脱节）。
     void ManualToggle()
     {
         printf("[app] F8 manual toggle\n");
@@ -202,7 +191,7 @@ struct AppController
     }
 };
 
-// 注入子命令（参数语义与 probe inject 一致，P0 已验）。
+// 注入子命令（参数语义与 probe inject 一致，真机验证过）。
 int RunInject(int argc, wchar_t **argv, int argStart)
 {
     bool submit = false;
@@ -267,200 +256,9 @@ int RunInject(int argc, wchar_t **argv, int argStart)
     return InjectText(text, submit, delayMs);
 }
 
-// sniff：抓取 ROI 并打印像素特征（平均色/采样点/与上一帧的差异），供聊天框定标观察。
-int RunSniff(int argc, wchar_t **argv, int argStart)
-{
-    int x = 0;
-    int y = 0;
-    int w = 0;
-    int h = 0;
-    DWORD intervalMs = 250;
-    DWORD maxCount = 0;
-    for (int i = argStart; i < argc; ++i)
-    {
-        const std::wstring arg = argv[i];
-        int *target = nullptr;
-        if (arg == L"--x")
-        {
-            target = &x;
-        }
-        else if (arg == L"--y")
-        {
-            target = &y;
-        }
-        else if (arg == L"--w")
-        {
-            target = &w;
-        }
-        else if (arg == L"--h")
-        {
-            target = &h;
-        }
-        else if (arg == L"--interval" && i + 1 < argc)
-        {
-            ++i;
-            intervalMs = static_cast<DWORD>(_wtoi(argv[i]));
-        }
-        else if (arg == L"--count" && i + 1 < argc)
-        {
-            ++i;
-            maxCount = static_cast<DWORD>(_wtoi(argv[i]));
-        }
-        if (target != nullptr && i + 1 < argc)
-        {
-            ++i;
-            *target = _wtoi(argv[i]);
-        }
-    }
-    if (w <= 0 || h <= 0)
-    {
-        // 默认屏幕底部中央区域（贴近常见聊天框位置），便于真机直接观察。
-        const int screenW = GetSystemMetrics(SM_CXSCREEN);
-        const int screenH = GetSystemMetrics(SM_CYSCREEN);
-        if (w <= 0)
-        {
-            w = 880;
-        }
-        if (h <= 0)
-        {
-            h = 220;
-        }
-        if (x == 0 && y == 0)
-        {
-            x = (screenW - w) / 2;
-            y = screenH - h - 60;
-        }
-    }
-    printf("sniff: roi=(%d,%d %dx%d) interval=%lu ms count=%lu — Ctrl+C to stop\n", x, y, w, h,
-           intervalMs, maxCount);
-    fflush(stdout);
-
-    CapturedFrame prev;
-    const DWORD started = GetTickCount();
-    for (DWORD frame = 0; maxCount == 0 || frame < maxCount; ++frame)
-    {
-        CapturedFrame cur;
-        if (!CaptureScreenRegion(x, y, w, h, cur))
-        {
-            printf("sniff: capture failed lastError=%lu\n", GetLastError());
-            return 10;
-        }
-        uint32_t avg = 0;
-        feature::AverageColor(cur, avg);
-        uint32_t tl = 0;
-        uint32_t mid = 0;
-        uint32_t br = 0;
-        feature::SamplePixel(cur, 0, 0, tl);
-        feature::SamplePixel(cur, w / 2, h / 2, mid);
-        feature::SamplePixel(cur, w - 1, h - 1, br);
-        printf("[%5lu ms] avg=#%02X%02X%02X tl=#%02X%02X%02X mid=#%02X%02X%02X br=#%02X%02X%02X",
-               GetTickCount() - started, feature::R(avg), feature::G(avg), feature::B(avg),
-               feature::R(tl), feature::G(tl), feature::B(tl), feature::R(mid), feature::G(mid),
-               feature::B(mid), feature::R(br), feature::G(br), feature::B(br));
-        if (!prev.empty())
-        {
-            double meanDiff = 0.0;
-            double changed = 0.0;
-            feature::FrameDiff(prev, cur, meanDiff, changed);
-            printf(" diff=%.1f changed=%.1f%%", meanDiff, changed * 100.0);
-        }
-        else
-        {
-            printf(" (first frame)");
-        }
-        printf("\n");
-        fflush(stdout);
-        prev = std::move(cur);
-        if (maxCount == 0 || frame + 1 < maxCount)
-        {
-            Sleep(intervalMs);
-        }
-    }
-    return 0;
-}
-
-// classify：读 [int32 w][int32 h][w*h*BGRA32] 的 bin，复算四态分类（离线回归用）。
-int RunClassify(int argc, wchar_t **argv, int argStart)
-{
-    if (argStart >= argc)
-    {
-        printf("classify: need a .bin path\n");
-        return 11;
-    }
-    const std::wstring path = argv[argStart];
-    FILE *file = nullptr;
-    if (_wfopen_s(&file, path.c_str(), L"rb") != 0 || file == nullptr)
-    {
-        printf("classify: cannot open %ls\n", path.c_str());
-        return 11;
-    }
-    int w = 0;
-    int h = 0;
-    size_t read = fread(&w, sizeof(int), 1, file);
-    read += fread(&h, sizeof(int), 1, file);
-    if (read != 2 || w <= 0 || h <= 0 || w > 10000 || h > 10000)
-    {
-        fclose(file);
-        printf("classify: bad header\n");
-        return 11;
-    }
-    CapturedFrame frame;
-    frame.width = w;
-    frame.height = h;
-    frame.pixels.assign(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
-    const size_t want = frame.pixels.size() * sizeof(uint32_t);
-    const size_t got = fread(frame.pixels.data(), 1, want, file);
-    fclose(file);
-    if (got != want)
-    {
-        printf("classify: short read %zu/%zu\n", got, want);
-        return 11;
-    }
-    const int detectW = static_cast<int>(frame.width * 0.62);
-    feature::PanelFeatures features;
-    feature::MeasurePanelFeatures(frame, 0, 0, detectW, frame.height, features);
-    const feature::PanelState state = feature::ClassifyPanel(features);
-    const char *name = state == feature::PanelState::Closed   ? "Closed"
-                       : state == feature::PanelState::Open   ? "Open"
-                                                               : "NoPanel";
-    printf("classify: %dx%d detectW=%d runMed=%.2f M150=%.2f%% iconW240=%.2f%% -> %s\n", w, h,
-           detectW, features.runMedRatio, features.pctM150, features.pctIconW240, name);
-    return 0;
-}
-
-// pixeldemo：运行像素感知源，打印 ChatOpen/ChatClose 事件（真机观察自动检测）。
-int RunPixelDemo(int argc, wchar_t **argv, int argStart)
-{
-    DWORD durationMs = 60000;
-    for (int i = argStart; i < argc; ++i)
-    {
-        if (argv[i][0] != L'\0' && wcscmp(argv[i], L"--duration") == 0 && i + 1 < argc)
-        {
-            ++i;
-            durationMs = static_cast<DWORD>(_wtoi(argv[i]));
-        }
-    }
-    printf("pixeldemo: watching HD2 chat panel for %lu ms — open/close the in-game chat box\n",
-           durationMs);
-    fflush(stdout);
-
-    PixelSensingSource pixel;
-    pixel.Start([](bool chatOpen) {
-        printf("[demo] %s\n", chatOpen ? "CHAT-OPEN" : "CHAT-CLOSE");
-        fflush(stdout);
-    });
-    const DWORD started = GetTickCount();
-    while (durationMs == 0 || GetTickCount() - started < durationMs)
-    {
-        Sleep(100);
-    }
-    pixel.Stop();
-    return 0;
-}
-
 // 守护模式：创建承载窗与浮层 → 绑定事件 → 注册 Enter 钩子/F8 → 泵消息。
-// autoMode=true：Enter 直呼出（WH_KEYBOARD_LL 监听）+ 像素源冗余 + F8 手动兜底。
-// autoMode=false：F8 toggle 占位感知（热键源）。
+// autoMode=true：Enter 直呼出（WH_KEYBOARD_LL 监听）+ F8 手动切换兜底。
+// autoMode=false：F8 toggle 占位（热键源）。
 int RunDaemon(bool autoMode, BYTE windowAlpha, DWORD maxDurationMs)
 {
     AppController controller;
@@ -485,7 +283,6 @@ int RunDaemon(bool autoMode, BYTE windowAlpha, DWORD maxDurationMs)
     controller.carrier.SetOnInactive([&controller]() { controller.OnCarrierInactive(); });
 
     const DWORD mainThreadId = GetCurrentThreadId();
-    PixelSensingSource pixelSensing; // autoMode 时启用
     HotkeySensingSource hotkeySensing;
     bool autoRegistered = false;
     HHOOK enterHook = nullptr;
@@ -493,15 +290,6 @@ int RunDaemon(bool autoMode, BYTE windowAlpha, DWORD maxDurationMs)
     if (autoMode)
     {
         g_hookMainThreadId = mainThreadId;
-        controller.sensingSource = &pixelSensing;
-        pixelSensing.Start([mainThreadId](bool chatOpen) {
-            // 轮询线程回调 → 投递主线程消息，由消息循环驱动 UI。
-            PostThreadMessageW(mainThreadId, chatOpen ? kMsgPixelOpen : kMsgPixelClose, 0, 0);
-        });
-        if (!pixelSensing.running())
-        {
-            return 8;
-        }
         // Enter 直呼出：只监听不吞键，游戏正常收到 Enter 打开聊天框。
         enterHook = SetWindowsHookExW(WH_KEYBOARD_LL, EnterOpenHookProc, instance, 0);
         if (enterHook == nullptr)
@@ -558,18 +346,7 @@ int RunDaemon(bool autoMode, BYTE windowAlpha, DWORD maxDurationMs)
                 printf("[daemon] WM_QUIT received\n");
                 goto done; // 统一清理
             }
-            if (message.message == kMsgPixelOpen || message.message == kMsgPixelClose)
-            {
-                if (message.message == kMsgPixelOpen)
-                {
-                    controller.OnChatOpen();
-                }
-                else
-                {
-                    controller.OnChatClose();
-                }
-            }
-            else if (message.message == kMsgEnterOpen)
+            if (message.message == kMsgEnterOpen)
             {
                 // 发送后冷却：SendInput 补发的 Enter 会被钩子捕获，冷却窗内忽略，
                 // 避免"发送成功后又自动呼出"；玩家连发需在此窗之后按 Enter。
@@ -608,7 +385,6 @@ done:
         {
             UnhookWindowsHookEx(enterHook);
         }
-        pixelSensing.Stop();
         if (autoRegistered)
         {
             UnregisterHotKey(nullptr, kAutoF8Id);
@@ -662,18 +438,6 @@ int wmain(int argc, wchar_t **argv)
         if (command == L"fg")
         {
             return PrintForegroundDiagnostics();
-        }
-        if (command == L"classify")
-        {
-            return RunClassify(argc, argv, 2);
-        }
-        if (command == L"pixeldemo")
-        {
-            return RunPixelDemo(argc, argv, 2);
-        }
-        if (command == L"sniff")
-        {
-            return RunSniff(argc, argv, 2);
         }
         if (command == L"inject")
         {
