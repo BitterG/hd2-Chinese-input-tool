@@ -1,8 +1,11 @@
-// hd2-ocr-input prototype — P1：全屏透明承载窗 + IME 激活验证。
+// hd2-ocr-input prototype — P3：Enter 两段式发送闭环。
 //
-// P0（热键占位感知 + 地基）之上接入 CarrierWindow：F8 进入打字态 = 显示全屏透明
-// 承载窗并拿焦（内嵌标准 Edit 承载系统 IME）；F8 退出 = 隐藏承载窗并把前台还给游戏。
-// 验证目标：系统中文输入法在承载窗上能正常组字、候选窗浮出。
+// P2（迷你浮层）之上接入发送闭环：非组字态 Enter = 发送（读承载窗文本 → 隐藏浮层/
+// 承载窗并还焦游戏 → 校验前台=HD2 → SendInput 整句 + 补 Enter）；非组字态 Esc = 取消
+// 退出。组字中 Enter/Esc 仍由 IME 处理（确认候选/取消组合），carrier 子类已区分。
+//
+// bugfix：发送/Esc 属"应用内退出"，需同步热键源的 toggle 状态（SyncSensingClosed），
+// 否则下一次 F8 会因内部状态残留需按两次才能进入打字态。
 //
 //   proto [--duration <ms>] [--alpha <0-255>]   守护模式（F8 toggle；默认 alpha=0 全透明）
 //   proto fg / proto inject ...                  复用 P0 子命令
@@ -12,6 +15,7 @@
 
 #include "carrier.h"
 #include "fgutil.h"
+#include "floattext.h"
 #include "inject.h"
 #include "sensing.h"
 
@@ -36,11 +40,13 @@ void PrintUsage()
            "  proto help\n");
 }
 
-// 主控：接收感知事件，驱动承载窗。P1 接入完成（P2/P3 追加浮层与发送闭环）。
+// 主控：接收感知/承载窗事件，驱动浮层与发送闭环。P3 接入完成（P4 感知层替换热键）。
 struct AppController
 {
     CarrierWindow carrier;
+    TextOverlay overlay;
     HWND gameHwnd = nullptr;
+    HotkeySensingSource *sensingSource = nullptr; // 热键占位源：应用内退出后同步其状态
     bool inChat = false;
 
     void OnChatOpen()
@@ -51,21 +57,67 @@ struct AppController
         }
         inChat = true;
         gameHwnd = GetForegroundWindow(); // 按 F8 时前台应为游戏（聊天框已打开）
-        printf("[app] chat-open  gameHwnd=%p -> carrier.show+focus\n", gameHwnd);
+        printf("[app] chat-open  gameHwnd=%p -> carrier.show+focus + overlay.show\n", gameHwnd);
         fflush(stdout);
         carrier.ShowAndFocus(gameHwnd);
+        overlay.Show();
     }
 
-    void OnChatClose()
+    // 退出打字态（不发送）：隐藏浮层与承载窗，前台还给游戏。
+    void DoExitChat()
     {
         if (!inChat)
         {
             return;
         }
         inChat = false;
-        printf("[app] chat-close -> carrier.hide+restore\n");
+        printf("[app] exit-chat -> overlay.hide + carrier.hide+restore\n");
         fflush(stdout);
+        overlay.Hide();
         carrier.HideAndRestoreFocus();
+        SyncSensingClosed(); // 幂等：覆盖 F8 正常退出与一切应用内退出路径
+    }
+
+    // 应用内退出（发送/Esc）后同步热键源内部 toggle 状态，防止下次 F8 需按两次。
+    void SyncSensingClosed()
+    {
+        if (sensingSource != nullptr)
+        {
+            sensingSource->ResetToClosed();
+        }
+    }
+
+    void OnChatClose()
+    {
+        DoExitChat(); // F8 第二次按下 = 放弃退出
+    }
+
+    // 非组字态 Esc → 取消退出。
+    void OnCancelRequested()
+    {
+        printf("[app] cancel (Esc)\n");
+        fflush(stdout);
+        DoExitChat();
+    }
+
+    // 非组字态 Enter → 发送闭环。
+    void OnSendRequested(std::wstring text)
+    {
+        if (!inChat)
+        {
+            return;
+        }
+        printf("[app] send: \"%ls\" (%zu units)\n", text.c_str(), text.size());
+        fflush(stdout);
+        // 先退出视觉打字态并还焦游戏，再做防误投校验与注入。
+        overlay.Hide();
+        carrier.HideAndRestoreFocus();
+        inChat = false;
+        SyncSensingClosed(); // 发送属应用内退出，热键 toggle 状态需复位
+        // InjectText 内部再校验前台=HD2（不匹配即拒绝、不补发 Enter），失败即中止。
+        const int result = InjectText(text, /*submit=*/true, /*delayMs=*/0);
+        printf("[app] send result=%d (%s)\n", result, result == 0 ? "ok" : "failed-aborted");
+        fflush(stdout);
     }
 };
 
@@ -134,15 +186,28 @@ int RunInject(int argc, wchar_t **argv, int argStart)
     return InjectText(text, submit, delayMs);
 }
 
-// 守护模式：创建承载窗（隐藏）→ 注册 F8 感知 → 泵消息；--duration 超时兜底退出。
+// 守护模式：创建承载窗与浮层 → 绑定文本/发送/取消回调 → 注册 F8 → 泵消息。
 int RunDaemon(BYTE windowAlpha, DWORD maxDurationMs)
 {
     AppController controller;
-    if (!controller.carrier.Create(GetModuleHandleW(nullptr), windowAlpha))
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    if (!controller.carrier.Create(instance, windowAlpha))
     {
         printf("[daemon] carrier create failed\n");
         return 9;
     }
+    if (!controller.overlay.Create(instance))
+    {
+        printf("[daemon] overlay create failed\n");
+        return 9;
+    }
+    // Edit 已上屏文本变化 → 刷新迷你浮层。
+    controller.carrier.SetOnTextChanged(
+        [&controller](std::wstring text) { controller.overlay.SetText(std::move(text)); });
+    // 非组字态 Enter → 发送闭环；Esc → 取消退出。
+    controller.carrier.SetOnSendRequested(
+        [&controller](std::wstring text) { controller.OnSendRequested(std::move(text)); });
+    controller.carrier.SetOnCancelRequested([&controller]() { controller.OnCancelRequested(); });
 
     HotkeySensingSource sensing;
     sensing.Start([&controller](bool chatOpen) {
@@ -160,8 +225,10 @@ int RunDaemon(BYTE windowAlpha, DWORD maxDurationMs)
         sensing.Stop();
         return 8;
     }
+    controller.sensingSource = &sensing; // 供应用内退出（发送/Esc）时同步 toggle 状态
 
-    printf("[daemon] running (max=%lu ms) — press F8 to toggle typing state, Ctrl+C to quit\n",
+    printf("[daemon] running (max=%lu ms) — F8: enter/exit typing, Enter: send, Esc: cancel, "
+           "Ctrl+C: quit\n",
            maxDurationMs);
     fflush(stdout);
 
@@ -181,6 +248,7 @@ int RunDaemon(BYTE windowAlpha, DWORD maxDurationMs)
             {
                 printf("[daemon] WM_QUIT received\n");
                 sensing.Stop();
+                controller.overlay.Hide();
                 controller.carrier.HideAndRestoreFocus();
                 return 0;
             }
@@ -194,6 +262,7 @@ int RunDaemon(BYTE windowAlpha, DWORD maxDurationMs)
         Sleep(10);
     }
     sensing.Stop();
+    controller.overlay.Hide();
     controller.carrier.HideAndRestoreFocus();
     return 0;
 }

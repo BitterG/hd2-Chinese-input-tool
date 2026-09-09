@@ -11,7 +11,7 @@ if not defined VSINSTALL (
 )
 
 call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" >nul
-cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DUNICODE /D_UNICODE /O2 src\proto.cpp src\sensing_hotkey.cpp src\fgutil.cpp src\inject.cpp src\carrier.cpp /link user32.lib gdi32.lib dwmapi.lib /out:proto.exe
+cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DUNICODE /D_UNICODE /O2 src\proto.cpp src\sensing_hotkey.cpp src\fgutil.cpp src\inject.cpp src\carrier.cpp src\floattext.cpp /link user32.lib gdi32.lib dwmapi.lib imm32.lib /out:proto.exe
 if errorlevel 1 (
     echo [build] cl failed
     exit /b 2

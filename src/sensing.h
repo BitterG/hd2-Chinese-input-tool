@@ -23,6 +23,10 @@ public:
     // 消息循环收到 WM_HOTKEY 时调用；返回是否被本源消费。
     bool HandleHotkey(WPARAM hotkeyId);
 
+    // 应用内自主退出（发送/Esc）后同步：把 toggle 内部状态复位为 closed，
+    // 避免下一次 F8 因状态残留需按两次才能进入。幂等。
+    void ResetToClosed();
+
     bool running() const { return running_; }
 
 private:
