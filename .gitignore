@@ -1,0 +1,13 @@
+# --- 编译产物（cl/VC） ---
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+# --- 编辑器与系统杂项 ---
+.vs/
+*.suo
+*.user
+Desktop.ini
+Thumbs.db
