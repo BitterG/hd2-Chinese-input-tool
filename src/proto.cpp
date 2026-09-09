@@ -38,6 +38,10 @@ constexpr DWORD kEnterOpenDelayMs = 40;
 // 发送后 Enter 直呼出冷却窗：SendInput 补发的 Enter 会被本钩子捕获，
 // 冷却窗内忽略之，避免"发送成功后又自动呼出"；玩家连发在此后按 Enter 即可。
 constexpr unsigned long long kEnterReopenCooldownMs = 400;
+// 连续检测不到 helldivers2.exe 进程达此时长（ms）→ 工具自动退出（不为空转常驻）。
+constexpr unsigned long long kHdAbsentAutoExitMs = 5000;
+// 进程存活检查节拍（ms）。
+constexpr unsigned long long kProcessCheckIntervalMs = 500;
 
 // Enter 直呼出钩子状态（主线程安装/清理；回调投递主线程消息）。
 DWORD g_hookMainThreadId = 0;
@@ -276,12 +280,31 @@ int RunDaemon(BYTE windowAlpha, DWORD maxDurationMs)
     // PeekMessage + Sleep(10) 轮询（沿用探针模式：可控退出、不依赖阻塞唤醒）。
     const DWORD started = GetTickCount();
     MSG message{};
+    ULONGLONG lastProcessCheckMs = 0;
+    ULONGLONG lastHdSeenMs = GetTickCount64(); // 最近检测到 helldivers2.exe 的时刻
     for (;;)
     {
         if (maxDurationMs > 0 && GetTickCount() - started > maxDurationMs)
         {
             printf("[daemon] timed out after %lu ms\n", maxDurationMs);
             break;
+        }
+        // 进程存活监测：游戏退出/未启动且连续 5s 未检测到 → 自动结束（工具只为游戏服务）。
+        const ULONGLONG nowMs = GetTickCount64();
+        if (nowMs - lastProcessCheckMs >= kProcessCheckIntervalMs)
+        {
+            lastProcessCheckMs = nowMs;
+            if (IsProcessRunning(L"helldivers2.exe"))
+            {
+                lastHdSeenMs = nowMs;
+            }
+            else if (nowMs - lastHdSeenMs >= kHdAbsentAutoExitMs)
+            {
+                printf("[daemon] HELLDIVERS 2 not running for %llu ms — auto exit\n",
+                       kHdAbsentAutoExitMs);
+                fflush(stdout);
+                break; // 统一清理
+            }
         }
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
         {

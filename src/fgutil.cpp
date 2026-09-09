@@ -4,6 +4,7 @@
 #include "fgutil.h"
 
 #include <dwmapi.h>
+#include <tlhelp32.h>
 #include <cstdio>
 
 namespace {
@@ -87,6 +88,39 @@ bool IsForegroundHd2Like(HWND *outHwnd, std::wstring *outTitle)
         }
     }
     return title.find(L"HELLDIVERS") != std::wstring::npos;
+}
+
+bool IsProcessRunning(const wchar_t *nameLower)
+{
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+    {
+        return true; // 快照失败：保守视为运行中（避免误判退出）
+    }
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Process32FirstW(snapshot, &entry))
+    {
+        do
+        {
+            std::wstring name = entry.szExeFile;
+            for (auto &ch : name)
+            {
+                if (ch >= L'A' && ch <= L'Z')
+                {
+                    ch += L'a' - L'A';
+                }
+            }
+            if (name == nameLower)
+            {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
 }
 
 int PrintForegroundDiagnostics()

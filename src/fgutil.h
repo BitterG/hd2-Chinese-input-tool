@@ -12,3 +12,7 @@ bool IsForegroundHd2Like(HWND *outHwnd, std::wstring *outTitle);
 
 // 打印前台窗口完整诊断（fg 子命令）。返回 0 表示成功。
 int PrintForegroundDiagnostics();
+
+// 指定小写进程名（如 L"helldivers2.exe"）是否在运行（CreateToolhelp32Snapshot）。
+// 快照失败时保守返回 true（避免误判退出）。
+bool IsProcessRunning(const wchar_t *nameLower);
