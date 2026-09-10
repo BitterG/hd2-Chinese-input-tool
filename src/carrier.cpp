@@ -183,6 +183,11 @@ LRESULT CALLBACK CarrierWindow::EditSubclassProc(HWND hwnd, UINT message, WPARAM
                                                  LPARAM lParam)
 {
     auto *self = reinterpret_cast<CarrierWindow *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    // 吞掉回车的 WM_CHAR（\r/\n）：单行 Edit 无默认按钮时，默认处理会响系统提示音（beep）。
+    if (message == WM_CHAR && (wParam == L'\r' || wParam == L'\n'))
+    {
+        return 0;
+    }
     if (message == WM_KEYDOWN)
     {
         if (wParam == VK_RETURN || wParam == VK_ESCAPE)
