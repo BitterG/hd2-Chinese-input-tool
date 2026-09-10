@@ -22,6 +22,10 @@
 "存放路径\hd2-chinese-input.exe" --spawn %command%
 ```
 点"开始游戏"：工具自动启动并拉起游戏；游戏退出后工具自动结束。**单独关闭工具不影响游戏**。
+若原本的启动参数有如 --use-d3dx11 应追加在最后面，如下：
+```
+"存放路径\hd2-chinese-input.exe" --spawn %command% --use-d3dx11
+```
 
 ### 3）任务计划自动拉起（可选，不改 Steam）
 `launcher.bat` 由任务计划每分钟检查一次：游戏在跑且工具没在跑 → 拉起工具。注册：
@@ -59,7 +63,7 @@ schtasks /Create /F /TN "HD2-CN-Input-Launcher" /TR "\"存放路径\launcher.bat
 - Ctrl+C（仅 `--console` 调试模式）
 
 ## 超级构建
-需要 Visual Studio（VC tools），在 `prototype/` 下运行：
+需要 Visual Studio（VC tools），在项目目录下运行：
 ```
 build.cmd
 ```
