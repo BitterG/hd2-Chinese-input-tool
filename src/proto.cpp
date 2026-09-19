@@ -169,10 +169,25 @@ struct AppController
         carrier.HideAndRestoreFocus();
         inChat = false;
         lastSendMs = GetTickCount64(); // 供 Enter 直呼出冷却（SendInput 补发 Enter）
+        // 焦点切换是异步的：短暂等待，确保前台确已回到游戏再注入（--spawn 场景曾因
+        // 还焦未即时生效导致 InjectText 校验前台≠HD2 而拒绝发送）。
+        Sleep(40);
         // InjectText 内部再校验前台=HD2（不匹配即拒绝、不补发 Enter），失败即中止。
         const int result = InjectText(text, /*submit=*/true, /*delayMs=*/0);
-        printf("[app] send result=%d (%s)\n", result, result == 0 ? "ok" : "failed-aborted");
+        printf("[app] send result=%d (%s) fg=%p\n", result, result == 0 ? "ok" : "failed-aborted",
+               GetForegroundWindow());
         fflush(stdout);
+        if (result != 0)
+        {
+            // 还焦失败兜底：前台不在游戏 → 再强制还焦一次并重试注入（仍校验前台）。
+            printf("[app] send retry after refocus\n");
+            fflush(stdout);
+            carrier.HideAndRestoreFocus();
+            Sleep(60);
+            const int retry = InjectText(text, /*submit=*/true, /*delayMs=*/0);
+            printf("[app] send retry result=%d fg=%p\n", retry, GetForegroundWindow());
+            fflush(stdout);
+        }
     }
 };
 
@@ -589,6 +604,8 @@ int wmain(int argc, wchar_t **argv)
             FILE *logStream = nullptr;
             if (_wfreopen_s(&logStream, logPath.c_str(), L"w", stdout) == 0)
             {
+                // 无缓冲：进程被强杀（如 Steam 结束游戏时杀进程树）也不丢日志。
+                setvbuf(stdout, nullptr, _IONBF, 0);
                 if (_dup2(_fileno(stdout), _fileno(stderr)) != 0)
                 {
                     // stderr 重定向失败无碍，忽略。

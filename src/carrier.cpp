@@ -8,24 +8,39 @@ namespace {
 
 const wchar_t *kClassName = L"Hd2OcrCarrierWnd";
 
-// 把前台窗口设为目标：先把本线程输入队列挂到"当前前台线程"（绕过前台锁定限制），
-// 再 SetForegroundWindow，最后解除挂接。游戏/目标为普通权限时有效（对齐参考项目场景）。
+// 把前台窗口设为目标：把本线程输入队列挂到"当前前台线程"与"目标线程"（绕过前台锁定
+// 限制），再 SetForegroundWindow，最后解除挂接。游戏为普通权限时有效（对齐参考项目场景）。
 void BringToForeground(HWND target)
 {
     if (target == nullptr || !IsWindow(target))
     {
         return;
     }
+    const HWND fg = GetForegroundWindow();
+    if (fg == target)
+    {
+        return; // 已是前台
+    }
     const DWORD current = GetCurrentThreadId();
-    const DWORD fgThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
-    bool attached = false;
+    const DWORD fgThread = (fg != nullptr) ? GetWindowThreadProcessId(fg, nullptr) : 0;
+    const DWORD targetThread = GetWindowThreadProcessId(target, nullptr);
+    bool attachedFg = false;
     if (fgThread != 0 && fgThread != current)
     {
-        attached = AttachThreadInput(current, fgThread, TRUE) != FALSE;
+        attachedFg = AttachThreadInput(current, fgThread, TRUE) != FALSE;
+    }
+    bool attachedTarget = false;
+    if (targetThread != 0 && targetThread != current && targetThread != fgThread)
+    {
+        attachedTarget = AttachThreadInput(current, targetThread, TRUE) != FALSE;
     }
     BringWindowToTop(target);
     SetForegroundWindow(target);
-    if (attached)
+    if (attachedTarget)
+    {
+        AttachThreadInput(current, targetThread, FALSE);
+    }
+    if (attachedFg)
     {
         AttachThreadInput(current, fgThread, FALSE);
     }
@@ -160,11 +175,18 @@ void CarrierWindow::HideAndRestoreFocus()
 {
     if (hwnd_ != nullptr && visible_)
     {
+        // 先还焦（此刻本进程仍是前台进程，SetForegroundWindow 更易成功），再隐藏承载窗；
+        // 避免"先隐藏 → 系统把前台切给第三方 → 还焦被前台锁定拒绝"（--spawn 场景曾现）。
+        BringToForeground(gameHwnd_);
         ShowWindow(hwnd_, SW_HIDE);
         visible_ = false;
-        printf("[carrier] hidden, restoring foreground to game=%p\n", gameHwnd_);
+        printf("[carrier] hidden, restoring foreground to game=%p (fg-now=%p)\n", gameHwnd_,
+               GetForegroundWindow());
         fflush(stdout);
-        BringToForeground(gameHwnd_);
+        if (GetForegroundWindow() != gameHwnd_)
+        {
+            BringToForeground(gameHwnd_); // 重试一次
+        }
     }
 }
 
