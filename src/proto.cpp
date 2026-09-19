@@ -464,8 +464,11 @@ int RunSpawnDaemon()
     PROCESS_INFORMATION service{};
     STARTUPINFOW serviceStartup{};
     serviceStartup.cb = sizeof(serviceStartup);
+    // CREATE_NO_WINDOW：服务进程**不带控制台窗口**——否则隐藏承载窗后系统会把前台
+    // 交给那个控制台窗口（而非游戏），导致注入前校验前台≠HD2、回车发送被拒
+    //（--spawn 场景"能输入但发不出、点一下游戏才恢复"即此故）。服务日志写文件，无需窗口。
     const BOOL serviceOk =
-        CreateProcessW(selfPath, selfCmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE,
+        CreateProcessW(selfPath, selfCmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
                        nullptr, nullptr, &serviceStartup, &service);
     if (!serviceOk)
     {
