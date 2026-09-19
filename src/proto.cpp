@@ -617,6 +617,11 @@ int wmain(int argc, wchar_t **argv)
             FreeConsole();
         }
     }
+    // 版本横幅（写入日志）：便于区分运行的 exe 版本与启动参数。
+    printf("[hd2-chinese-input] build %s %s pid=%lu\n", __DATE__, __TIME__,
+           GetCurrentProcessId());
+    printf("[hd2-chinese-input] cmdline: %ls\n", GetCommandLineW());
+    fflush(stdout);
     if (argc >= 2)
     {
         const std::wstring command = argv[1];
