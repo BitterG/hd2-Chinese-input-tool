@@ -70,5 +70,7 @@ private:
     std::function<void(std::wstring)> onSendRequested_;
     std::function<void()> onCancelRequested_;
     std::function<void()> onInactive_;
+    // 失焦回调抑制截止时刻（GetTickCount64）：抢焦/还焦/隐藏期间忽略自身引起的 WA_INACTIVE。
+    unsigned long long inactiveSuppressUntilMs_ = 0;
     bool visible_ = false;
 };

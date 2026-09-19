@@ -59,6 +59,9 @@ bool IsImeComposing(HWND edit)
     return len > 0;
 }
 
+// 抢焦/还焦/隐藏会引发承载窗自身的 WA_INACTIVE，那不是"玩家切走"，需抑制回调。
+constexpr unsigned long long kInactiveSuppressMs = 600;
+
 } // namespace
 
 CarrierWindow::~CarrierWindow()
@@ -152,6 +155,8 @@ void CarrierWindow::ShowAndFocus(HWND gameHwnd)
     {
         return;
     }
+    // 抢焦会引起承载窗自身的激活变化（WA_ACTIVE/WA_INACTIVE 抖动）→ 抑制失焦回调。
+    inactiveSuppressUntilMs_ = GetTickCount64() + kInactiveSuppressMs;
     // 进入打字态：清空上次残留文本，并通知浮层清屏。
     if (edit_ != nullptr)
     {
@@ -175,8 +180,9 @@ void CarrierWindow::HideAndRestoreFocus()
 {
     if (hwnd_ != nullptr && visible_)
     {
-        // 先还焦（此刻本进程仍是前台进程，SetForegroundWindow 更易成功），再隐藏承载窗；
-        // 避免"先隐藏 → 系统把前台切给第三方 → 还焦被前台锁定拒绝"（--spawn 场景曾现）。
+        // 还焦会引起失活抖动 → 抑制失焦回调（否则会被自己触发的 WA_INACTIVE 误退出）。
+        inactiveSuppressUntilMs_ = GetTickCount64() + kInactiveSuppressMs;
+        // 先还焦（此刻本进程仍是前台进程，SetForegroundWindow 更易成功），再隐藏承载窗。
         BringToForeground(gameHwnd_);
         ShowWindow(hwnd_, SW_HIDE);
         visible_ = false;
@@ -194,6 +200,7 @@ void CarrierWindow::HideQuiet()
 {
     if (hwnd_ != nullptr && visible_)
     {
+        inactiveSuppressUntilMs_ = GetTickCount64() + kInactiveSuppressMs;
         ShowWindow(hwnd_, SW_HIDE);
         visible_ = false;
         printf("[carrier] hidden quietly (inactive, no foreground steal)\n");
@@ -274,8 +281,11 @@ LRESULT CALLBACK CarrierWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, 
         return 0;
     }
     case WM_ACTIVATE:
-        // 玩家切走（Alt-Tab/点击其它窗口）→ 承载窗失去激活 → 通知主控静默退出打字态。
-        if (self != nullptr && LOWORD(wParam) == WA_INACTIVE && self->onInactive_)
+        // 玩家切走（Alt-Tab/点击其它窗口）→ 静默退出打字态。
+        // 注意：抢焦/还焦/隐藏承载窗自身也会引发 WA_INACTIVE，那不是玩家切走——
+        // 在抑制窗口期内忽略，避免"刚呼出就被自己判为失焦而退出"的时序竞争。
+        if (self != nullptr && LOWORD(wParam) == WA_INACTIVE && self->onInactive_ &&
+            GetTickCount64() >= self->inactiveSuppressUntilMs_)
         {
             self->onInactive_();
         }
