@@ -25,6 +25,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <io.h>
 #include <string>
 #include <vector>
 
@@ -576,10 +577,28 @@ int wmain(int argc, wchar_t **argv)
             maxDurationMs = static_cast<DWORD>(_wtoi(argv[i]));
         }
     }
-    // 默认不显示控制台黑窗（双击/服务均无窗口）。--console 保留窗口做调试。
-    if (!keepConsole && GetConsoleWindow() != nullptr)
+    // 默认不显示控制台黑窗。--console 保留窗口做调试；否则把 stdout/stderr 重定向到
+    // %TEMP%\hd2-chinese-input-<pid>.log（便于无窗时事后诊断；按 PID 命名避免多进程互写）。
+    if (!keepConsole)
     {
-        FreeConsole();
+        wchar_t tempPath[MAX_PATH] = L"";
+        if (GetTempPathW(MAX_PATH, tempPath) > 0)
+        {
+            const std::wstring logPath = std::wstring(tempPath) + L"hd2-chinese-input-" +
+                                         std::to_wstring(GetCurrentProcessId()) + L".log";
+            FILE *logStream = nullptr;
+            if (_wfreopen_s(&logStream, logPath.c_str(), L"w", stdout) == 0)
+            {
+                if (_dup2(_fileno(stdout), _fileno(stderr)) != 0)
+                {
+                    // stderr 重定向失败无碍，忽略。
+                }
+            }
+        }
+        if (GetConsoleWindow() != nullptr)
+        {
+            FreeConsole();
+        }
     }
     if (argc >= 2)
     {
