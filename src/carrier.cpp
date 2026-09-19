@@ -1,5 +1,7 @@
 #include "carrier.h"
 
+#include "ime.h"
+
 #include <imm.h>
 #include <cstdio>
 #include <utility>
@@ -170,6 +172,8 @@ void CarrierWindow::ShowAndFocus(HWND gameHwnd)
     BringToForeground(hwnd_);
     SetFocus(edit_);
     visible_ = true;
+    // 呼出输入框 → 切一次中文输入法（承载窗与主控同线程，ActivateKeyboardLayout 直接生效）。
+    SwitchToChineseInput(hwnd_);
     const HWND fg = GetForegroundWindow();
     printf("[carrier] shown  hwnd=%p foreground-now=%p focus-now=%p fg-is-carrier=%d\n", hwnd_,
            fg, GetFocus(), fg == hwnd_ ? 1 : 0);
@@ -193,6 +197,8 @@ void CarrierWindow::HideAndRestoreFocus()
         {
             BringToForeground(gameHwnd_); // 重试一次
         }
+        // 退出输入 → 切回英文输入法一次（对游戏窗口尽力：引擎不处理该消息则无效）。
+        SwitchToEnglishInput(gameHwnd_);
     }
 }
 
@@ -205,6 +211,7 @@ void CarrierWindow::HideQuiet()
         visible_ = false;
         printf("[carrier] hidden quietly (inactive, no foreground steal)\n");
         fflush(stdout);
+        // 注：这是"玩家切走"路径，不改动输入法（避免干扰其它窗口）。
     }
 }
 
